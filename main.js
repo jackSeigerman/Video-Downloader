@@ -4,9 +4,68 @@ const ytdl = require('@distube/ytdl-core');
 const ffmpeg = require('fluent-ffmpeg');
 const ffmpegStatic = require('ffmpeg-static');
 const fs = require('fs');
+const NodeID3 = require('node-id3');
+const axios = require('axios');
 
 // Set ffmpeg path
 ffmpeg.setFfmpegPath(ffmpegStatic);
+
+// Helper function to download thumbnail
+async function downloadThumbnail(thumbnailUrl, outputPath) {
+    try {
+        const response = await axios({
+            url: thumbnailUrl,
+            method: 'GET',
+            responseType: 'arraybuffer'
+        });
+        
+        fs.writeFileSync(outputPath, response.data);
+        return outputPath;
+    } catch (error) {
+        console.error('Error downloading thumbnail:', error);
+        return null;
+    }
+}
+
+// Helper function to extract metadata from YouTube video info
+function extractMetadata(videoDetails) {
+    const metadata = {
+        title: videoDetails.title || 'Unknown Title',
+        artist: videoDetails.author?.name || videoDetails.ownerChannelName || 'Unknown Artist',
+        album: `YouTube - ${videoDetails.author?.name || 'Unknown Channel'}`,
+        year: null,
+        comment: {
+            language: 'eng',
+            text: `Downloaded from: ${videoDetails.video_url}\nChannel: ${videoDetails.author?.name || 'Unknown'}\nViews: ${videoDetails.viewCount || 'Unknown'}\nDuration: ${videoDetails.lengthSeconds ? Math.floor(videoDetails.lengthSeconds / 60) + ':' + (videoDetails.lengthSeconds % 60).toString().padStart(2, '0') : 'Unknown'}`
+        },
+        genre: 'YouTube',
+        performerInfo: videoDetails.author?.name || 'Unknown',
+        originalFilename: videoDetails.title || 'Unknown'
+    };
+    
+    // Try to extract year from upload date or publish date
+    if (videoDetails.publishDate) {
+        const year = new Date(videoDetails.publishDate).getFullYear();
+        if (year > 1900 && year <= new Date().getFullYear()) {
+            metadata.year = year.toString();
+        }
+    } else if (videoDetails.uploadDate) {
+        const year = parseInt(videoDetails.uploadDate.substring(0, 4));
+        if (year > 1900 && year <= new Date().getFullYear()) {
+            metadata.year = year.toString();
+        }
+    }
+    
+    // Add more detailed description if available
+    if (videoDetails.description) {
+        const shortDesc = videoDetails.description.length > 200 
+            ? videoDetails.description.substring(0, 200) + '...' 
+            : videoDetails.description;
+        metadata.comment.text = `${shortDesc}\n\n${metadata.comment.text}`;
+    }
+    
+    return metadata;
+}
 
 let mainWindow;
 
@@ -335,25 +394,160 @@ ipcMain.handle('download-video', async (event, { url, downloadPath, format }) =>
 
                 // Download audio only and convert to MP3
                 const audioStream = ytdl(url, { format: highestAudio });
-                
                 const outputPath = path.join(downloadPath, `${title}.mp3`);
+                const tempMp3Path = path.join(downloadPath, `temp_${title}_${Date.now()}.mp3`);
+                
+                // Extract metadata from video info
+                const metadata = extractMetadata(info.videoDetails);
+                
+                // Get the best thumbnail (highest resolution)
+                let thumbnailPromise = null;
+                if (info.videoDetails.thumbnails && info.videoDetails.thumbnails.length > 0) {
+                    const thumbnails = info.videoDetails.thumbnails;
+                    const bestThumbnail = thumbnails.reduce((prev, current) => {
+                        return (current.width > prev.width) ? current : prev;
+                    });
+                    
+                    const thumbnailFile = path.join(downloadPath, `temp_thumb_${Date.now()}.jpg`);
+                    event.sender.send('download-progress', { 
+                        percent: 5,
+                        stage: 'Downloading thumbnail...' 
+                    });
+                    
+                    thumbnailPromise = downloadThumbnail(bestThumbnail.url, thumbnailFile);
+                }
                 
                 ffmpeg(audioStream)
                     .audioBitrate(320)
                     .audioCodec('libmp3lame')
                     .format('mp3')
-                    .save(outputPath)
+                    .save(tempMp3Path)
                     .on('progress', (progress) => {
+                        const percent = Math.min(85, 10 + (progress.percent || 0) * 0.75);
                         event.sender.send('download-progress', { 
-                            percent: progress.percent || 0,
+                            percent: percent,
                             stage: 'Converting to MP3...' 
                         });
                     })
-                    .on('end', () => {
-                        resolve({ success: true, path: outputPath });
+                    .on('end', async () => {
+                        // Wait for thumbnail download to complete
+                        let thumbnailPath = null;
+                        if (thumbnailPromise) {
+                            try {
+                                thumbnailPath = await thumbnailPromise;
+                            } catch (thumbError) {
+                                console.warn('Thumbnail download failed:', thumbError);
+                            }
+                        }
+                        
+                        // Now add metadata tags to the MP3 file
+                        event.sender.send('download-progress', { 
+                            percent: 90,
+                            stage: 'Adding metadata tags...' 
+                        });
+                        
+                        const tags = {
+                            title: metadata.title,
+                            artist: metadata.artist,
+                            album: metadata.album,
+                            genre: metadata.genre,
+                            year: metadata.year,
+                            comment: metadata.comment,
+                            performerInfo: metadata.performerInfo,
+                            originalFilename: metadata.originalFilename,
+                            TRCK: '1/1', // Track number
+                            TPE2: metadata.artist, // Album artist
+                            TPOS: '1/1', // Disc number
+                            TBPM: '', // BPM (empty)
+                            TIT3: 'YouTube Download', // Subtitle
+                            TKEY: '', // Key (empty)
+                            TLAN: 'eng', // Language
+                            TMED: 'DIG', // Media type (Digital)
+                            TPUB: 'YouTube', // Publisher
+                            TCOP: `© ${metadata.artist}`, // Copyright
+                            TENC: 'YouTube Video Downloader', // Encoded by
+                            TSSE: 'YouTube Video Downloader v1.0', // Software
+                            WXXX: {
+                                description: 'Source',
+                                url: url
+                            }
+                        };
+                        
+                        // Add thumbnail as album art if available
+                        if (thumbnailPath && fs.existsSync(thumbnailPath)) {
+                            try {
+                                tags.image = {
+                                    mime: 'image/jpeg',
+                                    type: {
+                                        id: 3,
+                                        name: 'front cover'
+                                    },
+                                    description: 'Album Cover',
+                                    imageBuffer: fs.readFileSync(thumbnailPath)
+                                };
+                            } catch (thumbError) {
+                                console.warn('Could not add thumbnail as album art:', thumbError);
+                            }
+                        }
+                        
+                        // Write tags to MP3 file
+                        const success = NodeID3.write(tags, tempMp3Path);
+                        
+                        if (success) {
+                            // Move the tagged file to final location
+                            fs.renameSync(tempMp3Path, outputPath);
+                            
+                            // Clean up thumbnail file
+                            if (thumbnailPath && fs.existsSync(thumbnailPath)) {
+                                try {
+                                    fs.unlinkSync(thumbnailPath);
+                                } catch (cleanupError) {
+                                    console.warn('Could not clean up thumbnail:', cleanupError);
+                                }
+                            }
+                            
+                            event.sender.send('download-progress', { 
+                                percent: 100,
+                                stage: 'Complete!' 
+                            });
+                            
+                            resolve({ 
+                                success: true, 
+                                path: outputPath,
+                                metadata: {
+                                    title: metadata.title,
+                                    artist: metadata.artist,
+                                    year: metadata.year,
+                                    hasArtwork: !!thumbnailPath
+                                }
+                            });
+                        } else {
+                            // If tagging fails, still keep the MP3 file
+                            fs.renameSync(tempMp3Path, outputPath);
+                            
+                            // Clean up thumbnail file
+                            if (thumbnailPath && fs.existsSync(thumbnailPath)) {
+                                try {
+                                    fs.unlinkSync(thumbnailPath);
+                                } catch (cleanupError) {}
+                            }
+                            
+                            resolve({ 
+                                success: true, 
+                                path: outputPath,
+                                warning: 'MP3 created but metadata tagging failed'
+                            });
+                        }
                     })
                     .on('error', (error) => {
                         console.error('FFmpeg error:', error);
+                        
+                        // Clean up temp files on error
+                        try {
+                            if (fs.existsSync(tempMp3Path)) fs.unlinkSync(tempMp3Path);
+                            if (thumbnailPath && fs.existsSync(thumbnailPath)) fs.unlinkSync(thumbnailPath);
+                        } catch (cleanupError) {}
+                        
                         reject({ success: false, error: 'Failed to convert to MP3: ' + error.message });
                     });
             }

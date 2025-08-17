@@ -11,11 +11,13 @@ A modern Electron desktop application for downloading YouTube videos in high qua
 
 - 🎥 **Highest Quality Downloads**: Always downloads the best available resolution (4K, 1080p, etc.)
 - 🎵 **Premium Audio Extraction**: Convert videos to MP3 format with 320kbps bitrate
+- 🏷️ **Complete MP3 Metadata**: Automatically tags MP3s with title, artist, year, album artwork, and more
 - 📁 **Custom Download Directory**: Choose where to save your files
 - 🖥️ **User-Friendly Interface**: Clean, modern design with real-time video information
 - ⚡ **Smart Quality Detection**: Automatically selects the highest quality video and audio streams
 - 🔒 **Safe & Secure**: No data collection, everything runs locally
 - 🔄 **Advanced Merging**: Uses FFmpeg to merge separate high-quality video and audio streams
+- 🎨 **Album Artwork**: Embeds video thumbnails as album art in MP3 files
 
 ## Installation
 
@@ -41,10 +43,20 @@ npm start
 2. **Select Download Directory**: Click "Browse" to choose where to save the file
 3. **Choose Format**: 
    - **MP4**: Downloads the highest quality video available (4K, 1080p, etc.)
-   - **MP3**: Extracts and converts audio to highest quality MP3 format
+   - **MP3**: Extracts and converts audio to highest quality MP3 with complete metadata tagging
 4. **Download**: Click the download button and wait for completion
 
 The app automatically detects and downloads the highest quality streams available for each video.
+
+### 🏷️ **MP3 Metadata Features**
+When downloading as MP3, the app automatically adds:
+- **Title, Artist, Album** from video information
+- **Year** extracted from upload date
+- **Album Artwork** from video thumbnail
+- **Detailed Comments** with video description, URL, views, and duration
+- **Professional Tags** compatible with all music players
+
+See [MP3-METADATA.md](MP3-METADATA.md) for complete details.
 
 ## Supported URL Formats
 

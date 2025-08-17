@@ -114,7 +114,21 @@ async function downloadVideo(event) {
         ipcRenderer.removeAllListeners('download-progress');
 
         if (result.success) {
-            showStatus(`✅ Download completed! File saved to: ${result.path}`, 'success');
+            if (result.metadata) {
+                // Show detailed success message for MP3 with metadata
+                const metaInfo = [];
+                if (result.metadata.title) metaInfo.push(`Title: ${result.metadata.title}`);
+                if (result.metadata.artist) metaInfo.push(`Artist: ${result.metadata.artist}`);
+                if (result.metadata.year) metaInfo.push(`Year: ${result.metadata.year}`);
+                if (result.metadata.hasArtwork) metaInfo.push('✓ Album artwork included');
+                
+                const metadataDetails = metaInfo.length > 0 ? `\n\nMetadata added:\n${metaInfo.join('\n')}` : '';
+                showStatus(`✅ MP3 download completed with full metadata!${metadataDetails}\n\nFile saved to: ${result.path}`, 'success');
+            } else if (result.warning) {
+                showStatus(`⚠️ ${result.warning}\nFile saved to: ${result.path}`, 'success');
+            } else {
+                showStatus(`✅ Download completed! File saved to: ${result.path}`, 'success');
+            }
         } else {
             showStatus('❌ Download failed: ' + result.error, 'error');
         }

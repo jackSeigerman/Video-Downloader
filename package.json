@@ -23,9 +23,11 @@
   },
   "dependencies": {
     "@distube/ytdl-core": "^4.16.12",
+    "axios": "^1.11.0",
     "electron": "^37.3.0",
     "ffmpeg-static": "^5.2.0",
     "fluent-ffmpeg": "^2.1.2",
+    "node-id3": "^0.2.9",
     "path": "^0.12.7"
   }
 }
