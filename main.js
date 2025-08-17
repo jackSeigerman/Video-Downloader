@@ -37,7 +37,15 @@ async function downloadThumbnail(thumbnailUrl, outputPath) {
                 try {
                     console.log('Converting WebP to JPEG from buffer...');
                     const jpegBuffer = await sharp(response.data)
-                        .jpeg({ quality: 90 })
+                        .resize(800, 800, { 
+                            fit: 'inside',
+                            withoutEnlargement: true 
+                        })
+                        .jpeg({ 
+                            quality: 90,
+                            progressive: false,
+                            mozjpeg: true 
+                        })
                         .toBuffer();
                     
                     fs.writeFileSync(outputPath, jpegBuffer);
@@ -51,10 +59,18 @@ async function downloadThumbnail(thumbnailUrl, outputPath) {
                     return outputPath;
                 }
             } else {
-                // For regular images, still process through Sharp for consistency
+                // For regular images, still process through Sharp for consistency and optimization
                 try {
                     const processedBuffer = await sharp(response.data)
-                        .jpeg({ quality: 90 })
+                        .resize(800, 800, { 
+                            fit: 'inside',
+                            withoutEnlargement: true 
+                        })
+                        .jpeg({ 
+                            quality: 90,
+                            progressive: false,
+                            mozjpeg: true 
+                        })
                         .toBuffer();
                     
                     fs.writeFileSync(outputPath, processedBuffer);
@@ -121,14 +137,20 @@ let mainWindow;
 
 function createWindow() {
     mainWindow = new BrowserWindow({
-        width: 800,
-        height: 600,
+        width: 500,
+        height: 700,
         webPreferences: {
             nodeIntegration: true,
             contextIsolation: false
         },
-        icon: path.join(__dirname, 'assets', 'YoutubeDownloaderLogo.png')
+        icon: path.join(__dirname, 'assets', 'YoutubeDownloaderLogo.png'),
+        autoHideMenuBar: true,
+        menuBarVisible: false
     });
+
+    // Remove the menu bar completely
+    mainWindow.setMenuBarVisibility(false);
+    mainWindow.setMenu(null);
 
     mainWindow.loadFile('index.html');
     
@@ -151,10 +173,24 @@ app.on('activate', () => {
 });
 
 // IPC handlers
-ipcMain.handle('select-directory', async () => {
-    const result = await dialog.showOpenDialog(mainWindow, {
+ipcMain.handle('select-directory', async (event, defaultPath) => {
+    const dialogOptions = {
         properties: ['openDirectory']
-    });
+    };
+    
+    // Set default path if provided and it exists
+    if (defaultPath) {
+        const fs = require('fs');
+        try {
+            if (fs.existsSync(defaultPath)) {
+                dialogOptions.defaultPath = defaultPath;
+            }
+        } catch (error) {
+            // Ignore error, just don't set default path
+        }
+    }
+    
+    const result = await dialog.showOpenDialog(mainWindow, dialogOptions);
     
     return result.filePaths[0];
 });
@@ -170,6 +206,24 @@ ipcMain.handle('get-video-info', async (event, url) => {
         }
 
         const info = await ytdl.getInfo(url);
+        
+        // Get the best quality thumbnail
+        let thumbnail = null;
+        if (info.videoDetails.thumbnails && info.videoDetails.thumbnails.length > 0) {
+            // Sort thumbnails by resolution (highest first)
+            const sortedThumbnails = info.videoDetails.thumbnails
+                .filter(thumb => thumb.url && thumb.width && thumb.height)
+                .sort((a, b) => b.width - a.width);
+            
+            // Get the highest quality thumbnail, but prefer medium quality for faster loading
+            if (sortedThumbnails.length > 0) {
+                // If there are multiple thumbnails, get a good balance of quality and size
+                const mediumQualityThumb = sortedThumbnails.find(thumb => 
+                    thumb.width >= 320 && thumb.width <= 640
+                );
+                thumbnail = mediumQualityThumb?.url || sortedThumbnails[0]?.url;
+            }
+        }
         
         // Get available quality information from video-only formats (highest quality)
         const videoFormats = ytdl.filterFormats(info.formats, 'videoonly');
@@ -206,7 +260,7 @@ ipcMain.handle('get-video-info', async (event, url) => {
             success: true,
             title: info.videoDetails.title,
             duration: info.videoDetails.lengthSeconds,
-            thumbnail: info.videoDetails.thumbnails[0]?.url,
+            thumbnail: thumbnail,
             availableQualities: availableQualities,
             highestQuality: highestQuality
         };
@@ -559,16 +613,29 @@ ipcMain.handle('download-video', async (event, { url, downloadPath, format }) =>
                                     try {
                                         const thumbnailBuffer = fs.readFileSync(thumbnailPath);
                                         if (thumbnailBuffer.length > 0) {
+                                            // Use APIC frame format for better compatibility
+                                            tags.APIC = {
+                                                mime: 'image/jpeg',
+                                                type: {
+                                                    id: 3,
+                                                    name: 'front cover'
+                                                },
+                                                description: 'Cover (front)',
+                                                imageBuffer: thumbnailBuffer
+                                            };
+                                            
+                                            // Also set the legacy image field for backward compatibility
                                             tags.image = {
                                                 mime: 'image/jpeg',
                                                 type: {
                                                     id: 3,
                                                     name: 'front cover'
                                                 },
-                                                description: 'Album Cover',
+                                                description: 'Cover (front)',
                                                 imageBuffer: thumbnailBuffer
                                             };
-                                            console.log(`Album art added: ${thumbnailBuffer.length} bytes`);
+                                            
+                                            console.log(`Album art added (APIC + image): ${thumbnailBuffer.length} bytes`);
                                             
                                             event.sender.send('download-progress', { 
                                                 percent: 90,

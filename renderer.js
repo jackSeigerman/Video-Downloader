@@ -10,18 +10,38 @@ const downloadForm = document.getElementById('downloadForm');
 const videoInfo = document.getElementById('videoInfo');
 const videoTitle = document.getElementById('videoTitle');
 const videoDuration = document.getElementById('videoDuration');
+const videoThumbnail = document.getElementById('videoThumbnail');
 const status = document.getElementById('status');
 
 // Event listeners
 selectDirBtn.addEventListener('click', selectDirectory);
+downloadPathInput.addEventListener('click', selectDirectory);
 videoUrlInput.addEventListener('blur', getVideoInfo);
 downloadForm.addEventListener('submit', downloadVideo);
 
+// Load saved directory on startup
+window.addEventListener('DOMContentLoaded', loadSavedDirectory);
+
+function loadSavedDirectory() {
+    const savedPath = localStorage.getItem('lastDownloadPath');
+    if (savedPath && savedPath.trim()) {
+        downloadPathInput.value = savedPath;
+    }
+}
+
+function saveDirectory(path) {
+    if (path && path.trim()) {
+        localStorage.setItem('lastDownloadPath', path);
+    }
+}
+
 async function selectDirectory() {
     try {
-        const selectedPath = await ipcRenderer.invoke('select-directory');
+        const currentPath = downloadPathInput.value.trim();
+        const selectedPath = await ipcRenderer.invoke('select-directory', currentPath);
         if (selectedPath) {
             downloadPathInput.value = selectedPath;
+            saveDirectory(selectedPath);
         }
     } catch (error) {
         showStatus('Error selecting directory: ' + error.message, 'error');
@@ -32,6 +52,7 @@ async function getVideoInfo() {
     const url = videoUrlInput.value.trim();
     if (!url || !isValidYouTubeUrl(url)) {
         videoInfo.classList.remove('show');
+        videoThumbnail.style.display = 'none';
         return;
     }
 
@@ -42,6 +63,18 @@ async function getVideoInfo() {
         if (info.success) {
             videoTitle.textContent = info.title;
             videoDuration.textContent = `Duration: ${formatDuration(info.duration)}`;
+            
+            // Show thumbnail if available
+            if (info.thumbnail) {
+                videoThumbnail.src = info.thumbnail;
+                videoThumbnail.style.display = 'block';
+                videoThumbnail.onerror = function() {
+                    // If thumbnail fails to load, try a fallback or hide it
+                    this.style.display = 'none';
+                };
+            } else {
+                videoThumbnail.style.display = 'none';
+            }
             
             // Show quality information if available
             if (info.highestQuality) {
@@ -58,7 +91,13 @@ async function getVideoInfo() {
                     existingQuality.remove();
                 }
                 
-                videoInfo.appendChild(qualityInfo);
+                // Append to video-details div instead of main videoInfo
+                const videoDetails = document.querySelector('.video-details');
+                if (videoDetails) {
+                    videoDetails.appendChild(qualityInfo);
+                } else {
+                    videoInfo.appendChild(qualityInfo);
+                }
             }
             
             videoInfo.classList.add('show');
@@ -66,10 +105,12 @@ async function getVideoInfo() {
         } else {
             showStatus('Error getting video info: ' + info.error, 'error');
             videoInfo.classList.remove('show');
+            videoThumbnail.style.display = 'none';
         }
     } catch (error) {
         showStatus('Error: ' + error.message, 'error');
         videoInfo.classList.remove('show');
+        videoThumbnail.style.display = 'none';
     }
 }
 
@@ -92,14 +133,14 @@ async function downloadVideo(event) {
 
     try {
         downloadBtn.disabled = true;
-        downloadBtn.textContent = '📥 Downloading...';
+        downloadBtn.textContent = 'Downloading...';
         showStatus(`Downloading ${format.toUpperCase()} in highest quality...`, 'loading');
 
         // Listen for progress updates
         ipcRenderer.on('download-progress', (event, progress) => {
             if (progress.percent) {
                 const percent = Math.round(progress.percent);
-                downloadBtn.textContent = `📥 ${percent}%`;
+                downloadBtn.textContent = `${percent}%`;
                 showStatus(`${progress.stage || 'Downloading'} ${percent}%`, 'loading');
             }
         });
@@ -123,21 +164,21 @@ async function downloadVideo(event) {
                 if (result.metadata.hasArtwork) metaInfo.push('✓ Album artwork included');
                 
                 const metadataDetails = metaInfo.length > 0 ? `\n\nMetadata added:\n${metaInfo.join('\n')}` : '';
-                showStatus(`✅ MP3 download completed with full metadata!${metadataDetails}\n\nFile saved to: ${result.path}`, 'success');
+                showStatus(`MP3 download completed with full metadata!${metadataDetails}\n\nFile saved to: ${result.path}`, 'success');
             } else if (result.warning) {
-                showStatus(`⚠️ ${result.warning}\nFile saved to: ${result.path}`, 'success');
+                showStatus(`${result.warning}\nFile saved to: ${result.path}`, 'success');
             } else {
-                showStatus(`✅ Download completed! File saved to: ${result.path}`, 'success');
+                showStatus(`Download completed! File saved to: ${result.path}`, 'success');
             }
         } else {
-            showStatus('❌ Download failed: ' + result.error, 'error');
+            showStatus('Download failed: ' + result.error, 'error');
         }
     } catch (error) {
-        showStatus('❌ Download error: ' + error.message, 'error');
+        showStatus('Download error: ' + error.message, 'error');
         ipcRenderer.removeAllListeners('download-progress');
     } finally {
         downloadBtn.disabled = false;
-        downloadBtn.textContent = '📥 Download Video';
+        downloadBtn.textContent = 'Download Video';
     }
 }
 

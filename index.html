@@ -8,31 +8,36 @@
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             margin: 0;
-            padding: 20px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 0;
+            background: white;
             min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .container {
+            width: 100%;
+            height: 100vh;
+            margin: 0;
+            background: white;
+            border-radius: 20px;
+            padding: 30px;
+            box-sizing: border-box;
             display: flex;
             flex-direction: column;
         }
 
-        .container {
-            max-width: 600px;
-            margin: 0 auto;
-            background: white;
-            border-radius: 15px;
-            padding: 30px;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
-        }
-
         .header {
             text-align: center;
-            margin-bottom: 30px;
+            margin-bottom: 25px;
+            flex-shrink: 0;
         }
 
         .header h1 {
             color: #333;
             margin: 0;
-            font-size: 2.5em;
+            font-size: 2.2em;
             font-weight: 300;
         }
 
@@ -43,6 +48,7 @@
 
         .form-group {
             margin-bottom: 20px;
+            flex-shrink: 0;
         }
 
         label {
@@ -64,13 +70,21 @@
 
         input[type="url"]:focus, select:focus {
             outline: none;
-            border-color: #667eea;
+            border-color: #000000;
         }
 
         .directory-section {
             display: flex;
-            gap: 10px;
-            align-items: end;
+            gap: 8px;
+            align-items: stretch;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            overflow: hidden;
+            transition: border-color 0.3s ease;
+        }
+
+        .directory-section:focus-within {
+            border-color: #3700ff;
         }
 
         .directory-path {
@@ -78,12 +92,49 @@
         }
 
         .directory-path input {
-            background-color: #f5f5f5;
+            background-color: white;
+            border: none;
+            border-radius: 0;
+            padding: 12px 16px;
             cursor: pointer;
+            color: #333;
+            font-size: 14px;
+            transition: background-color 0.2s ease;
+        }
+
+        .directory-path input:hover {
+            background-color: #f8f9fa;
+        }
+
+        .directory-path input:focus {
+            outline: none;
+            border: none;
+            background-color: white;
+        }
+
+        .directory-path input::placeholder {
+            color: #999;
+        }
+
+        #selectDir {
+            background: linear-gradient(135deg, #3700ff 0%, #0400ff 100%);
+            border: none;
+            border-radius: 0;
+            padding: 12px 20px;
+            font-size: 14px;
+            font-weight: 600;
+            min-width: 80px;
+            transition: background 0.2s ease;
+        }
+
+        #selectDir:hover {
+            background: linear-gradient(135deg, #4a0bff 0%, #1507ff 100%);
+            transform: none;
+            box-shadow: none;
         }
 
         button {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: linear-gradient(135deg, #3700ff 0%, #0400ff 100%);
             color: white;
             border: none;
             padding: 12px 24px;
@@ -114,7 +165,7 @@
         }
 
         .video-info {
-            background: #f8f9fa;
+            background: #f0f0f0;
             border-radius: 8px;
             padding: 15px;
             margin: 20px 0;
@@ -125,10 +176,31 @@
             display: block;
         }
 
+        .video-info-content {
+            display: flex;
+            gap: 15px;
+            align-items: flex-start;
+        }
+
+        .video-thumbnail {
+            width: 120px;
+            height: 90px;
+            object-fit: cover;
+            border-radius: 6px;
+            flex-shrink: 0;
+        }
+
+        .video-details {
+            flex: 1;
+            min-width: 0;
+        }
+
         .video-title {
             font-weight: 600;
             color: #333;
             margin-bottom: 5px;
+            line-height: 1.3;
+            word-wrap: break-word;
         }
 
         .video-duration {
@@ -178,8 +250,7 @@
 <body>
     <div class="container">
         <div class="header">
-            <h1>🎥 YouTube Downloader</h1>
-            <p>Download videos in the highest quality available as MP4 or convert to MP3</p>
+            <h1>Video Downloader</h1>
         </div>
 
         <form id="downloadForm">
@@ -189,8 +260,13 @@
             </div>
 
             <div id="videoInfo" class="video-info">
-                <div class="video-title" id="videoTitle"></div>
-                <div class="video-duration" id="videoDuration"></div>
+                <div class="video-info-content">
+                    <img id="videoThumbnail" class="video-thumbnail" src="" alt="Video thumbnail" style="display: none;">
+                    <div class="video-details">
+                        <div class="video-title" id="videoTitle"></div>
+                        <div class="video-duration" id="videoDuration"></div>
+                    </div>
+                </div>
             </div>
 
             <div class="form-group">
@@ -206,13 +282,13 @@
             <div class="form-group">
                 <label for="format">Format:</label>
                 <select id="format">
-                    <option value="mp4">MP4 (Highest Quality Video)</option>
-                    <option value="mp3">MP3 (Highest Quality Audio)</option>
+                    <option value="mp4">MP4</option>
+                    <option value="mp3">MP3</option>
                 </select>
             </div>
 
             <button type="submit" class="download-btn" id="downloadBtn">
-                📥 Download Video
+                Download
             </button>
         </form>
 
