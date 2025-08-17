@@ -1,8 +1,124 @@
 # Youtube-Downloader <img src="assets/YoutubeDownloaderLogo.png" width="120px" alt="YoutubeDownloaderLogo" align="right">
 
-![Static Badge](https://img.shields.io/badge/Java-f89820)
+# YouTube Video Downloader
+
+![Static Badge](https://img.shields.io/badge/JavaScript-f7df1e) ![Static Badge](https://img.shields.io/badge/Electron-47848f) ![Static Badge](https://img.shields.io/badge/Node.js-339933)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-![GitHub Release](https://img.shields.io/github/v/release/jackSeigerman/Youtube-Downloader)
+
+A modern Electron desktop application for downloading YouTube videos in high quality. Supports both MP4 video downloads and MP3 audio extraction.
+
+## Features
+
+- 🎥 **Highest Quality Downloads**: Always downloads the best available resolution (4K, 1080p, etc.)
+- 🎵 **Premium Audio Extraction**: Convert videos to MP3 format with 320kbps bitrate
+- 📁 **Custom Download Directory**: Choose where to save your files
+- 🖥️ **User-Friendly Interface**: Clean, modern design with real-time video information
+- ⚡ **Smart Quality Detection**: Automatically selects the highest quality video and audio streams
+- 🔒 **Safe & Secure**: No data collection, everything runs locally
+- 🔄 **Advanced Merging**: Uses FFmpeg to merge separate high-quality video and audio streams
+
+## Installation
+
+1. Clone this repository:
+```bash
+git clone https://github.com/jackSeigerman/Video-Downloader.git
+cd Video-Downloader
+```
+
+2. Install dependencies:
+```bash
+npm install
+```
+
+3. Run the application:
+```bash
+npm start
+```
+
+## Usage
+
+1. **Enter YouTube URL**: Paste any valid YouTube video URL into the input field
+2. **Select Download Directory**: Click "Browse" to choose where to save the file
+3. **Choose Format**: 
+   - **MP4**: Downloads the highest quality video available (4K, 1080p, etc.)
+   - **MP3**: Extracts and converts audio to highest quality MP3 format
+4. **Download**: Click the download button and wait for completion
+
+The app automatically detects and downloads the highest quality streams available for each video.
+
+## Supported URL Formats
+
+- `https://www.youtube.com/watch?v=VIDEO_ID`
+- `https://youtu.be/VIDEO_ID`
+- `https://www.youtube.com/embed/VIDEO_ID`
+- `https://www.youtube.com/v/VIDEO_ID`
+
+## Technical Details
+
+### Dependencies
+
+- **Electron**: Desktop application framework
+- **ytdl-core**: YouTube video information and stream extraction
+- **fluent-ffmpeg**: Video/audio processing and conversion
+- **ffmpeg-static**: Static FFmpeg binary for media processing
+
+### File Structure
+
+```
+Video-Downloader/
+├── main.js          # Main Electron process
+├── index.html       # Application UI
+├── renderer.js      # Frontend logic and IPC communication
+├── package.json     # Dependencies and scripts
+└── assets/          # Application icons and images
+```
+
+## Development
+
+To run in development mode with logging:
+```bash
+npm run dev
+```
+
+## Building for Distribution
+
+To build the application for distribution, you'll need to install electron-builder:
+```bash
+npm install electron-builder --save-dev
+npm run build
+```
+
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Test thoroughly
+5. Submit a pull request
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## Disclaimer
+
+This tool is for personal use only. Please respect YouTube's Terms of Service and copyright laws. Only download content that you have the right to download.
+
+## Troubleshooting
+
+### Common Issues
+
+1. **Download fails**: Ensure you have a stable internet connection and the YouTube URL is valid
+2. **MP3 conversion issues**: The app uses FFmpeg for conversion; ensure all dependencies are properly installed
+3. **Permission errors**: Make sure you have write permissions to the selected download directory
+
+### Getting Help
+
+If you encounter issues:
+1. Check the console for error messages (View → Toggle Developer Tools)
+2. Ensure all dependencies are installed (`npm install`)
+3. Try restarting the application
+4. Open an issue on GitHub with details about the problem
 
 
 A program to download videos from YouTube as an Mp4 or Mp3. You can change the directory that the video or audio downloads to. 

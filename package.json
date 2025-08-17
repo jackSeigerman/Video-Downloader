@@ -1,0 +1,31 @@
+{
+  "name": "video-downloader",
+  "version": "1.0.0",
+  "description": "A modern Electron desktop application for downloading YouTube videos in high quality using @distube/ytdl-core. Supports MP4 video downloads and MP3 audio extraction with custom directory selection.",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --enable-logging",
+    "build": "electron-builder"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jackSeigerman/Video-Downloader.git"
+  },
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/jackSeigerman/Video-Downloader/issues"
+  },
+  "homepage": "https://github.com/jackSeigerman/Video-Downloader#readme",
+  "devDependencies": {
+    "electron": "^37.3.0"
+  },
+  "dependencies": {
+    "@distube/ytdl-core": "^4.16.12",
+    "electron": "^37.3.0",
+    "ffmpeg-static": "^5.2.0",
+    "fluent-ffmpeg": "^2.1.2",
+    "path": "^0.12.7"
+  }
+}
