@@ -327,15 +327,60 @@ ipcMain.handle('download-video', async (event, { url, downloadPath, format }) =>
                             // Both downloads complete, now merge with FFmpeg
                             event.sender.send('download-progress', { 
                                 percent: 95,
-                                stage: 'Merging video and audio...' 
+                                stage: 'Processing for Premiere Pro compatibility...' 
                             });
                             
-                            ffmpeg(tempVideoPath)
+                            // Check if video needs re-encoding (VP9 to H.264 for Premiere Pro)
+                            const needsVideoReencoding = highestVideo.codecs && 
+                                (highestVideo.codecs.includes('vp9') || highestVideo.codecs.includes('vp09'));
+                            
+                            console.log(`Video codec: ${highestVideo.codecs}, needs re-encoding: ${needsVideoReencoding}`);
+                            
+                            const ffmpegCommand = ffmpeg(tempVideoPath)
                                 .input(tempAudioPath)
-                                .videoCodec('copy')
-                                .audioCodec('copy')
+                                .audioCodec('aac')
+                                .audioChannels(2)
+                                .audioFrequency(48000)
+                                .audioBitrate('320k')
                                 .format('mp4')
+                                .outputOptions([
+                                    '-movflags', '+faststart',
+                                    '-strict', 'experimental'
+                                ]);
+                            
+                            if (needsVideoReencoding) {
+                                // Re-encode VP9 to H.264 for Premiere Pro compatibility
+                                console.log('Converting VP9 to H.264 for Premiere Pro...');
+                                event.sender.send('download-progress', { 
+                                    percent: 95,
+                                    stage: 'Converting VP9 to H.264 for Premiere Pro...' 
+                                });
+                                
+                                ffmpegCommand
+                                    .videoCodec('libx264')
+                                    .videoBitrate('8000k') // High quality for editing
+                                    .outputOptions([
+                                        '-preset', 'fast',      // Balance speed vs compression
+                                        '-crf', '18',           // High quality constant rate factor
+                                        '-pix_fmt', 'yuv420p'   // Premiere-compatible pixel format
+                                    ]);
+                            } else {
+                                // Copy video codec if it's already compatible (H.264, etc.)
+                                ffmpegCommand.videoCodec('copy');
+                            }
+                            
+                            ffmpegCommand
                                 .save(outputPath)
+                                .on('progress', (progress) => {
+                                    if (needsVideoReencoding) {
+                                        // Video re-encoding progress (slower)
+                                        const percent = Math.min(99, 95 + (progress.percent || 0) * 0.04);
+                                        event.sender.send('download-progress', { 
+                                            percent: percent,
+                                            stage: `Converting VP9 to H.264... ${Math.round(progress.percent || 0)}%`
+                                        });
+                                    }
+                                })
                                 .on('end', () => {
                                     // Clean up temporary files
                                     try {
@@ -455,10 +500,11 @@ ipcMain.handle('download-video', async (event, { url, downloadPath, format }) =>
                         
                         const videoStream = ytdl(url, { format: highestCombined });
                         const outputPath = path.join(downloadPath, `${title}.mp4`);
-                        const writeStream = fs.createWriteStream(outputPath);
+                        const tempCombinedPath = path.join(downloadPath, `temp_combined_${Date.now()}.mp4`);
+                        const writeStream = fs.createWriteStream(tempCombinedPath);
                         
                         videoStream.on('progress', (chunkLength, downloaded, total) => {
-                            const percent = ((downloaded / total) * 100).toFixed(1);
+                            const percent = ((downloaded / total) * 90).toFixed(1); // Leave 10% for processing
                             event.sender.send('download-progress', { 
                                 percent, 
                                 stage: `Downloading ${highestCombined.qualityLabel || highestCombined.height + 'p'}...`
@@ -468,7 +514,84 @@ ipcMain.handle('download-video', async (event, { url, downloadPath, format }) =>
                         videoStream.pipe(writeStream);
                         
                         writeStream.on('finish', () => {
-                            resolve({ success: true, path: outputPath });
+                            // Check if video needs re-encoding for Premiere Pro compatibility
+                            event.sender.send('download-progress', { 
+                                percent: 95,
+                                stage: 'Processing for Premiere Pro compatibility...' 
+                            });
+                            
+                            const needsVideoReencoding = highestCombined.codecs && 
+                                (highestCombined.codecs.includes('vp9') || highestCombined.codecs.includes('vp09'));
+                            
+                            console.log(`Combined format codec: ${highestCombined.codecs}, needs re-encoding: ${needsVideoReencoding}`);
+                            
+                            const ffmpegCommand = ffmpeg(tempCombinedPath)
+                                .audioCodec('aac')
+                                .audioChannels(2)
+                                .audioFrequency(48000)
+                                .audioBitrate('320k')
+                                .format('mp4')
+                                .outputOptions([
+                                    '-movflags', '+faststart',
+                                    '-strict', 'experimental'
+                                ]);
+                            
+                            if (needsVideoReencoding) {
+                                // Re-encode VP9 to H.264 for Premiere Pro compatibility
+                                console.log('Converting VP9 to H.264 for Premiere Pro...');
+                                event.sender.send('download-progress', { 
+                                    percent: 95,
+                                    stage: 'Converting VP9 to H.264 for Premiere Pro...' 
+                                });
+                                
+                                ffmpegCommand
+                                    .videoCodec('libx264')
+                                    .videoBitrate('8000k')
+                                    .outputOptions([
+                                        '-preset', 'fast',
+                                        '-crf', '18',
+                                        '-pix_fmt', 'yuv420p'
+                                    ]);
+                            } else {
+                                ffmpegCommand.videoCodec('copy');
+                            }
+                            
+                            ffmpegCommand
+                                .save(outputPath)
+                                .on('progress', (progress) => {
+                                    if (needsVideoReencoding) {
+                                        // Video re-encoding progress
+                                        const percent = Math.min(99, 95 + (progress.percent || 0) * 0.04);
+                                        event.sender.send('download-progress', { 
+                                            percent: percent,
+                                            stage: `Converting VP9 to H.264... ${Math.round(progress.percent || 0)}%`
+                                        });
+                                    }
+                                })
+                                .on('end', () => {
+                                    // Clean up temporary file
+                                    try {
+                                        fs.unlinkSync(tempCombinedPath);
+                                    } catch (cleanupError) {
+                                        console.warn('Could not clean up temporary file:', cleanupError);
+                                    }
+                                    resolve({ success: true, path: outputPath });
+                                })
+                                .on('error', (error) => {
+                                    console.error('FFmpeg processing error:', error);
+                                    // Clean up temp file and fall back to original
+                                    try {
+                                        if (fs.existsSync(tempCombinedPath)) {
+                                            fs.renameSync(tempCombinedPath, outputPath);
+                                            console.log('Falling back to original file format');
+                                            resolve({ success: true, path: outputPath });
+                                        } else {
+                                            reject({ success: false, error: 'Failed to process video: ' + error.message });
+                                        }
+                                    } catch (fallbackError) {
+                                        reject({ success: false, error: 'Failed to process video: ' + error.message });
+                                    }
+                                });
                         });
                         
                         writeStream.on('error', (error) => {
