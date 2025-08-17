@@ -6,6 +6,7 @@ const ffmpegStatic = require('ffmpeg-static');
 const fs = require('fs');
 const NodeID3 = require('node-id3');
 const axios = require('axios');
+const sharp = require('sharp');
 
 // Set ffmpeg path
 ffmpeg.setFfmpegPath(ffmpegStatic);
@@ -14,20 +15,58 @@ ffmpeg.setFfmpegPath(ffmpegStatic);
 async function downloadThumbnail(thumbnailUrl, outputPath) {
     try {
         console.log('Downloading thumbnail from:', thumbnailUrl);
+        
+        // Detect if URL suggests WebP format
+        const isWebP = thumbnailUrl.includes('vi_webp') || thumbnailUrl.includes('.webp');
+        
         const response = await axios({
             url: thumbnailUrl,
             method: 'GET',
             responseType: 'arraybuffer',
-            timeout: 10000, // 10 second timeout
+            timeout: 15000, // 15 second timeout for larger images
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
             }
         });
         
         if (response.data && response.data.byteLength > 0) {
-            fs.writeFileSync(outputPath, response.data);
-            console.log(`Thumbnail saved: ${response.data.byteLength} bytes`);
-            return outputPath;
+            console.log(`Thumbnail downloaded: ${response.data.byteLength} bytes`);
+            
+            // If it's WebP, convert directly from buffer to avoid file locking
+            if (isWebP || thumbnailUrl.includes('vi_webp')) {
+                try {
+                    console.log('Converting WebP to JPEG from buffer...');
+                    const jpegBuffer = await sharp(response.data)
+                        .jpeg({ quality: 90 })
+                        .toBuffer();
+                    
+                    fs.writeFileSync(outputPath, jpegBuffer);
+                    console.log(`Converted thumbnail saved: ${jpegBuffer.length} bytes`);
+                    return outputPath;
+                } catch (conversionError) {
+                    console.warn('WebP conversion failed, trying fallback:', conversionError.message);
+                    // Fallback: save original data
+                    fs.writeFileSync(outputPath, response.data);
+                    console.log('Using original format as fallback');
+                    return outputPath;
+                }
+            } else {
+                // For regular images, still process through Sharp for consistency
+                try {
+                    const processedBuffer = await sharp(response.data)
+                        .jpeg({ quality: 90 })
+                        .toBuffer();
+                    
+                    fs.writeFileSync(outputPath, processedBuffer);
+                    console.log(`Processed thumbnail saved: ${processedBuffer.length} bytes`);
+                    return outputPath;
+                } catch (processError) {
+                    console.warn('Image processing failed, using original:', processError.message);
+                    // Use original data if processing fails
+                    fs.writeFileSync(outputPath, response.data);
+                    return outputPath;
+                }
+            }
         } else {
             console.warn('Thumbnail response was empty');
             return null;
@@ -411,9 +450,11 @@ ipcMain.handle('download-video', async (event, { url, downloadPath, format }) =>
                     let thumbnailPath = null;
                     if (info.videoDetails.thumbnails && info.videoDetails.thumbnails.length > 0) {
                         const thumbnails = info.videoDetails.thumbnails;
-                        const bestThumbnail = thumbnails.reduce((prev, current) => {
-                            return (current.width > prev.width) ? current : prev;
-                        });
+                        
+                        // Sort thumbnails by quality (width) descending
+                        const sortedThumbnails = thumbnails
+                            .filter(thumb => thumb.url && thumb.width && thumb.height)
+                            .sort((a, b) => b.width - a.width);
                         
                         const thumbnailFile = path.join(downloadPath, `temp_thumb_${Date.now()}.jpg`);
                         event.sender.send('download-progress', { 
@@ -421,27 +462,38 @@ ipcMain.handle('download-video', async (event, { url, downloadPath, format }) =>
                             stage: 'Downloading thumbnail...' 
                         });
                         
-                        try {
-                            thumbnailPath = await downloadThumbnail(bestThumbnail.url, thumbnailFile);
-                            console.log('Thumbnail downloaded to:', thumbnailPath);
+                        // Try multiple thumbnail URLs in order of quality
+                        for (let i = 0; i < Math.min(3, sortedThumbnails.length); i++) {
+                            const thumbnail = sortedThumbnails[i];
+                            console.log(`Trying thumbnail ${i + 1}: ${thumbnail.width}x${thumbnail.height} from ${thumbnail.url}`);
                             
-                            // Verify thumbnail file exists and has content
-                            if (thumbnailPath && fs.existsSync(thumbnailPath)) {
-                                const stats = fs.statSync(thumbnailPath);
-                                if (stats.size === 0) {
-                                    console.warn('Thumbnail file is empty, removing');
-                                    fs.unlinkSync(thumbnailPath);
-                                    thumbnailPath = null;
+                            try {
+                                thumbnailPath = await downloadThumbnail(thumbnail.url, thumbnailFile);
+                                
+                                if (thumbnailPath && fs.existsSync(thumbnailPath)) {
+                                    const stats = fs.statSync(thumbnailPath);
+                                    if (stats.size > 0) {
+                                        console.log(`Thumbnail success: ${stats.size} bytes`);
+                                        break; // Success, stop trying
+                                    } else {
+                                        console.warn('Thumbnail file is empty, trying next...');
+                                        try {
+                                            fs.unlinkSync(thumbnailPath);
+                                        } catch (e) {}
+                                        thumbnailPath = null;
+                                    }
                                 } else {
-                                    console.log(`Thumbnail ready: ${stats.size} bytes`);
+                                    console.warn('Thumbnail download failed, trying next...');
+                                    thumbnailPath = null;
                                 }
-                            } else {
-                                console.warn('Thumbnail file does not exist after download');
+                            } catch (thumbError) {
+                                console.warn(`Thumbnail ${i + 1} failed:`, thumbError.message);
                                 thumbnailPath = null;
                             }
-                        } catch (thumbError) {
-                            console.warn('Thumbnail download failed:', thumbError);
-                            thumbnailPath = null;
+                        }
+                        
+                        if (!thumbnailPath) {
+                            console.warn('All thumbnail downloads failed');
                         }
                     }
 
