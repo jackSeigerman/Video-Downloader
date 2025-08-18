@@ -25,11 +25,14 @@ A modern Electron desktop application for downloading YouTube videos in high qua
 
 ### Windows
 Download the setup file from the latest release:
-[Video Downloader Setup 1.0.0.exe](https://github.com/jackSeigerman/Video-Downloader/releases/download/v7.0/Video.Downloader.Setup.1.0.0.exe)
+[Video Downloader Setup Windows.exe](https://github.com/jackSeigerman/Video-Downloader/releases/download/v7.0/Video.Downloader.windows.exe)
 
 ### macOS
 Download the DMG file from the latest release:
-[Video Downloader 1.0.0.dmg](https://github.com/jackSeigerman/Video-Downloader/releases/download/v7.0/Video.Downloader-1.0.0-x64.dmg)
+[Video Downloader MacOS(Silicon).dmg](https://github.com/jackSeigerman/Video-Downloader/releases/download/v7.0/Video.Downloader-MacOS.Silicon.dmg)
+
+If you have an older Intel Mac, dowload the latest release:
+[Video Downloader MacOS(Intel).dmg](https://github.com/jackSeigerman/Video-Downloader/releases/download/v7.0/Video.Downloader-MacOS.Intel.dmg)
 
 ### Development Installation
 
