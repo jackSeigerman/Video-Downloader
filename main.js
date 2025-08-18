@@ -1,87 +1,92 @@
 const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('path');
-const ytdl = require('@distube/ytdl-core');
-const ffmpeg = require('fluent-ffmpeg');
-const ffmpegStatic = require('ffmpeg-static');
 const fs = require('fs');
 const NodeID3 = require('node-id3');
 const axios = require('axios');
 const sharp = require('sharp');
+const YTDlpWrap = require('yt-dlp-wrap').default;
+const ffmpegStatic = require('ffmpeg-static');
 
-// Set ffmpeg path
-ffmpeg.setFfmpegPath(ffmpegStatic);
+// Initialize yt-dlp wrapper
+let ytDlp;
+
+// Initialize yt-dlp on app ready
+async function initializeYtDlp() {
+    try {
+        // Determine the correct path for yt-dlp.exe
+        let localYtDlpPath;
+        
+        if (app.isPackaged) {
+            // In packaged app, binaries are in extraResources
+            localYtDlpPath = path.join(process.resourcesPath, 'yt-dlp.exe');
+        } else {
+            // In development, use local path
+            localYtDlpPath = path.join(__dirname, 'yt-dlp.exe');
+        }
+        
+        if (fs.existsSync(localYtDlpPath)) {
+            ytDlp = new YTDlpWrap(localYtDlpPath);
+            console.log('Using local yt-dlp binary:', localYtDlpPath);
+            return true;
+        } else {
+            console.log('Local yt-dlp not found at:', localYtDlpPath);
+            // Fallback to default initialization
+            ytDlp = new YTDlpWrap();
+            console.log('Using default yt-dlp initialization');
+            return true;
+        }
+    } catch (error) {
+        console.error('Failed to initialize yt-dlp:', error);
+        try {
+            // Final fallback: try to use system yt-dlp
+            ytDlp = new YTDlpWrap('yt-dlp');
+            console.log('Using system yt-dlp binary');
+            return true;
+        } catch (fallbackError) {
+            console.error('All yt-dlp initialization methods failed:', fallbackError);
+            return false;
+        }
+    }
+}
 
 // Helper function to download thumbnail
 async function downloadThumbnail(thumbnailUrl, outputPath) {
     try {
         console.log('Downloading thumbnail from:', thumbnailUrl);
         
-        // Detect if URL suggests WebP format
-        const isWebP = thumbnailUrl.includes('vi_webp') || thumbnailUrl.includes('.webp');
-        
         const response = await axios({
             url: thumbnailUrl,
             method: 'GET',
             responseType: 'arraybuffer',
-            timeout: 15000, // 15 second timeout for larger images
+            timeout: 15000,
             headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
             }
         });
         
         if (response.data && response.data.byteLength > 0) {
             console.log(`Thumbnail downloaded: ${response.data.byteLength} bytes`);
             
-            // If it's WebP, convert directly from buffer to avoid file locking
-            if (isWebP || thumbnailUrl.includes('vi_webp')) {
-                try {
-                    console.log('Converting WebP to JPEG from buffer...');
-                    const jpegBuffer = await sharp(response.data)
-                        .resize(800, 800, { 
-                            fit: 'inside',
-                            withoutEnlargement: true 
-                        })
-                        .jpeg({ 
-                            quality: 90,
-                            progressive: false,
-                            mozjpeg: true 
-                        })
-                        .toBuffer();
-                    
-                    fs.writeFileSync(outputPath, jpegBuffer);
-                    console.log(`Converted thumbnail saved: ${jpegBuffer.length} bytes`);
-                    return outputPath;
-                } catch (conversionError) {
-                    console.warn('WebP conversion failed, trying fallback:', conversionError.message);
-                    // Fallback: save original data
-                    fs.writeFileSync(outputPath, response.data);
-                    console.log('Using original format as fallback');
-                    return outputPath;
-                }
-            } else {
-                // For regular images, still process through Sharp for consistency and optimization
-                try {
-                    const processedBuffer = await sharp(response.data)
-                        .resize(800, 800, { 
-                            fit: 'inside',
-                            withoutEnlargement: true 
-                        })
-                        .jpeg({ 
-                            quality: 90,
-                            progressive: false,
-                            mozjpeg: true 
-                        })
-                        .toBuffer();
-                    
-                    fs.writeFileSync(outputPath, processedBuffer);
-                    console.log(`Processed thumbnail saved: ${processedBuffer.length} bytes`);
-                    return outputPath;
-                } catch (processError) {
-                    console.warn('Image processing failed, using original:', processError.message);
-                    // Use original data if processing fails
-                    fs.writeFileSync(outputPath, response.data);
-                    return outputPath;
-                }
+            try {
+                const jpegBuffer = await sharp(response.data)
+                    .resize(800, 800, { 
+                        fit: 'inside',
+                        withoutEnlargement: true 
+                    })
+                    .jpeg({ 
+                        quality: 90,
+                        progressive: false,
+                        mozjpeg: true 
+                    })
+                    .toBuffer();
+                
+                fs.writeFileSync(outputPath, jpegBuffer);
+                console.log(`Processed thumbnail saved: ${jpegBuffer.length} bytes`);
+                return outputPath;
+            } catch (processError) {
+                console.warn('Image processing failed, using original:', processError.message);
+                fs.writeFileSync(outputPath, response.data);
+                return outputPath;
             }
         } else {
             console.warn('Thumbnail response was empty');
@@ -93,41 +98,54 @@ async function downloadThumbnail(thumbnailUrl, outputPath) {
     }
 }
 
-// Helper function to extract metadata from YouTube video info
-function extractMetadata(videoDetails) {
+// Helper function to extract metadata from yt-dlp info
+function extractMetadata(videoInfo) {
     const metadata = {
-        title: videoDetails.title || 'Unknown Title',
-        artist: videoDetails.author?.name || videoDetails.ownerChannelName || 'Unknown Artist',
-        album: `YouTube - ${videoDetails.author?.name || 'Unknown Channel'}`,
+        title: videoInfo.title || 'Unknown Title',
+        artist: videoInfo.uploader || videoInfo.channel || 'Unknown Artist',
+        album: `YouTube - ${videoInfo.uploader || videoInfo.channel || 'Unknown Channel'}`,
         year: null,
         comment: {
             language: 'eng',
-            text: `Downloaded from: ${videoDetails.video_url}\nChannel: ${videoDetails.author?.name || 'Unknown'}\nViews: ${videoDetails.viewCount || 'Unknown'}\nDuration: ${videoDetails.lengthSeconds ? Math.floor(videoDetails.lengthSeconds / 60) + ':' + (videoDetails.lengthSeconds % 60).toString().padStart(2, '0') : 'Unknown'}`
+            text: `Downloaded from: ${videoInfo.webpage_url || videoInfo.original_url}\nChannel: ${videoInfo.uploader || 'Unknown'}\nViews: ${videoInfo.view_count || 'Unknown'}\nDuration: ${videoInfo.duration ? Math.floor(videoInfo.duration / 60) + ':' + (videoInfo.duration % 60).toString().padStart(2, '0') : 'Unknown'}`
         },
         genre: 'YouTube',
-        performerInfo: videoDetails.author?.name || 'Unknown',
-        originalFilename: videoDetails.title || 'Unknown'
+        performerInfo: videoInfo.uploader || 'Unknown',
+        originalFilename: videoInfo.title || 'Unknown',
+        trackNumber: '1/1',
+        partOfSet: '1/1',
+        albumArtist: videoInfo.uploader || 'Unknown',
+        subtitle: 'YouTube Download',
+        language: 'eng',
+        mediaType: 'DIG',
+        publisher: 'YouTube',
+        copyright: `© ${videoInfo.uploader || 'Unknown'}`,
+        encodedBy: 'YouTube Video Downloader',
+        software: 'YouTube Video Downloader v1.0'
     };
     
-    // Try to extract year from upload date or publish date
-    if (videoDetails.publishDate) {
-        const year = new Date(videoDetails.publishDate).getFullYear();
-        if (year > 1900 && year <= new Date().getFullYear()) {
-            metadata.year = year.toString();
-        }
-    } else if (videoDetails.uploadDate) {
-        const year = parseInt(videoDetails.uploadDate.substring(0, 4));
+    // Try to extract year from upload date
+    if (videoInfo.upload_date) {
+        const year = parseInt(videoInfo.upload_date.substring(0, 4));
         if (year > 1900 && year <= new Date().getFullYear()) {
             metadata.year = year.toString();
         }
     }
     
-    // Add more detailed description if available
-    if (videoDetails.description) {
-        const shortDesc = videoDetails.description.length > 200 
-            ? videoDetails.description.substring(0, 200) + '...' 
-            : videoDetails.description;
+    // Add description if available
+    if (videoInfo.description) {
+        const shortDesc = videoInfo.description.length > 200 
+            ? videoInfo.description.substring(0, 200) + '...' 
+            : videoInfo.description;
         metadata.comment.text = `${shortDesc}\n\n${metadata.comment.text}`;
+    }
+    
+    // Add custom URL tag
+    if (videoInfo.webpage_url) {
+        metadata.userDefinedUrl = [{
+            description: 'Source URL',
+            url: videoInfo.webpage_url
+        }];
     }
     
     return metadata;
@@ -139,6 +157,7 @@ function createWindow() {
     mainWindow = new BrowserWindow({
         width: 500,
         height: 700,
+        title: 'Video Downloader',
         webPreferences: {
             nodeIntegration: true,
             contextIsolation: false
@@ -148,17 +167,15 @@ function createWindow() {
         menuBarVisible: false
     });
 
-    // Remove the menu bar completely
     mainWindow.setMenuBarVisibility(false);
     mainWindow.setMenu(null);
-
     mainWindow.loadFile('index.html');
-    
-    // Open DevTools in development
-    // mainWindow.webContents.openDevTools();
 }
 
-app.whenReady().then(createWindow);
+app.whenReady().then(async () => {
+    await initializeYtDlp();
+    createWindow();
+});
 
 app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') {
@@ -178,88 +195,96 @@ ipcMain.handle('select-directory', async (event, defaultPath) => {
         properties: ['openDirectory']
     };
     
-    // Set default path if provided and it exists
-    if (defaultPath) {
-        const fs = require('fs');
-        try {
-            if (fs.existsSync(defaultPath)) {
-                dialogOptions.defaultPath = defaultPath;
-            }
-        } catch (error) {
-            // Ignore error, just don't set default path
-        }
+    if (defaultPath && fs.existsSync(defaultPath)) {
+        dialogOptions.defaultPath = defaultPath;
     }
     
     const result = await dialog.showOpenDialog(mainWindow, dialogOptions);
-    
     return result.filePaths[0];
 });
 
 ipcMain.handle('get-video-info', async (event, url) => {
     try {
-        // Validate URL first
-        if (!ytdl.validateURL(url)) {
-            return {
-                success: false,
-                error: 'Invalid YouTube URL'
-            };
-        }
-
-        const info = await ytdl.getInfo(url);
+        console.log('Getting video info for:', url);
         
-        // Get the best quality thumbnail
+        // Get video information using yt-dlp
+        const videoInfo = await ytDlp.getVideoInfo(url);
+        
+        console.log('Video info retrieved successfully');
+        console.log('Title:', videoInfo.title);
+        console.log('Duration:', videoInfo.duration);
+        
+        // Get available formats
+        const formats = videoInfo.formats || [];
+        console.log('Total formats available:', formats.length);
+        
+        // Log some format details for debugging
+        if (formats.length > 0) {
+            console.log('Sample formats:');
+            formats.slice(0, 5).forEach(f => {
+                console.log(`- ${f.format_id}: ${f.height}p, vcodec: ${f.vcodec}, acodec: ${f.acodec}`);
+            });
+        }
+        
+        const videoFormats = formats.filter(f => f.vcodec && f.vcodec !== 'none' && (!f.acodec || f.acodec === 'none'));
+        const audioFormats = formats.filter(f => f.acodec && f.acodec !== 'none' && (!f.vcodec || f.vcodec === 'none'));
+        const combinedFormats = formats.filter(f => f.vcodec && f.vcodec !== 'none' && f.acodec && f.acodec !== 'none');
+        
+        console.log('Video formats:', videoFormats.length);
+        console.log('Audio formats:', audioFormats.length);
+        console.log('Combined formats:', combinedFormats.length);
+        
+        // Log video format details
+        if (videoFormats.length > 0) {
+            console.log('Video format details:');
+            videoFormats.forEach(f => {
+                console.log(`- ${f.format_id}: ${f.height}p, ${f.fps}fps, ${f.vcodec}`);
+            });
+        }
+        
+        // Get available qualities - check all formats that have video
+        let availableQualities = [];
+        let highestQuality = 'Unknown';
+        
+        // Combine all formats that have video (both video-only and combined)
+        const allVideoFormats = [...videoFormats, ...combinedFormats].filter(f => f.height);
+        
+        if (allVideoFormats.length > 0) {
+            console.log('All video formats with height:');
+            allVideoFormats.forEach(f => {
+                console.log(`- ${f.format_id}: ${f.height}p, ${f.format_note || 'no note'}`);
+            });
+            
+            const qualities = allVideoFormats
+                .map(f => f.height)
+                .filter((height, index, self) => self.indexOf(height) === index)
+                .sort((a, b) => b - a)
+                .map(h => h + 'p');
+            
+            availableQualities = qualities;
+            highestQuality = qualities[0] || 'Unknown';
+        }
+        
+        console.log('Highest quality detected:', highestQuality);
+        console.log('Available qualities:', availableQualities);
+        
+        // Get thumbnail
         let thumbnail = null;
-        if (info.videoDetails.thumbnails && info.videoDetails.thumbnails.length > 0) {
-            // Sort thumbnails by resolution (highest first)
-            const sortedThumbnails = info.videoDetails.thumbnails
+        if (videoInfo.thumbnail) {
+            thumbnail = videoInfo.thumbnail;
+        } else if (videoInfo.thumbnails && videoInfo.thumbnails.length > 0) {
+            // Get highest quality thumbnail
+            const sortedThumbnails = videoInfo.thumbnails
                 .filter(thumb => thumb.url && thumb.width && thumb.height)
                 .sort((a, b) => b.width - a.width);
             
-            // Get the highest quality thumbnail, but prefer medium quality for faster loading
-            if (sortedThumbnails.length > 0) {
-                // If there are multiple thumbnails, get a good balance of quality and size
-                const mediumQualityThumb = sortedThumbnails.find(thumb => 
-                    thumb.width >= 320 && thumb.width <= 640
-                );
-                thumbnail = mediumQualityThumb?.url || sortedThumbnails[0]?.url;
-            }
-        }
-        
-        // Get available quality information from video-only formats (highest quality)
-        const videoFormats = ytdl.filterFormats(info.formats, 'videoonly');
-        const combinedFormats = ytdl.filterFormats(info.formats, 'videoandaudio');
-        
-        // Find the absolute highest quality from video-only formats
-        let highestQuality = 'Unknown';
-        let availableQualities = [];
-        
-        if (videoFormats.length > 0) {
-            const sortedVideoFormats = videoFormats
-                .filter(format => format.height) // Only formats with height info
-                .sort((a, b) => b.height - a.height); // Sort by height descending
-            
-            availableQualities = sortedVideoFormats
-                .map(format => format.qualityLabel || `${format.height}p`)
-                .filter((quality, index, self) => self.indexOf(quality) === index);
-            
-            highestQuality = availableQualities[0] || 'Unknown';
-        } else if (combinedFormats.length > 0) {
-            // Fallback to combined formats if no video-only available
-            availableQualities = combinedFormats
-                .map(format => format.qualityLabel || `${format.height}p`)
-                .filter((quality, index, self) => self.indexOf(quality) === index)
-                .sort((a, b) => {
-                    const aNum = parseInt(a);
-                    const bNum = parseInt(b);
-                    return bNum - aNum;
-                });
-            highestQuality = availableQualities[0] || 'Unknown';
+            thumbnail = sortedThumbnails[0]?.url;
         }
         
         return {
             success: true,
-            title: info.videoDetails.title,
-            duration: info.videoDetails.lengthSeconds,
+            title: videoInfo.title,
+            duration: videoInfo.duration,
             thumbnail: thumbnail,
             availableQualities: availableQualities,
             highestQuality: highestQuality
@@ -275,597 +300,224 @@ ipcMain.handle('get-video-info', async (event, url) => {
 
 ipcMain.handle('download-video', async (event, { url, downloadPath, format }) => {
     try {
-        // Validate URL first
-        if (!ytdl.validateURL(url)) {
-            return { success: false, error: 'Invalid YouTube URL' };
-        }
-
-        const info = await ytdl.getInfo(url);
-        const title = info.videoDetails.title.replace(/[^\w\s\-_.]/gi, ''); // Remove special characters but keep safe ones
+        console.log('Starting download with yt-dlp...');
+        console.log('URL:', url);
+        console.log('Path:', downloadPath);
+        console.log('Format:', format);
         
-        // Check if directory exists and is writable
+        // Check if directory exists
         if (!fs.existsSync(downloadPath)) {
             return { success: false, error: 'Download directory does not exist' };
         }
 
-        return new Promise((resolve, reject) => {
-            if (format === 'mp4') {
-                // Strategy: Try highest quality video-only + audio-only first, then fallback to combined
-                const videoFormats = ytdl.filterFormats(info.formats, 'videoonly');
-                const audioFormats = ytdl.filterFormats(info.formats, 'audioonly');
-                const combinedFormats = ytdl.filterFormats(info.formats, 'videoandaudio');
-                
-                // Check if we have separate high-quality streams available
-                if (videoFormats.length > 0 && audioFormats.length > 0) {
-                    // Find the highest quality video and audio
-                    const highestVideo = videoFormats.reduce((prev, current) => {
-                        return (current.height > prev.height) ? current : prev;
-                    });
+        // Get video info first for metadata
+        const videoInfo = await ytDlp.getVideoInfo(url);
+        const title = videoInfo.title.replace(/[^\w\s\-_.]/gi, '');
+        
+        console.log('Video title:', title);
+
+        return new Promise(async (resolve, reject) => {
+            try {
+                if (format === 'mp4') {
+                    // Download best quality video
+                    const outputPath = path.join(downloadPath, `${title}.%(ext)s`);
                     
-                    const highestAudio = audioFormats.reduce((prev, current) => {
-                        return (current.audioBitrate > prev.audioBitrate) ? current : prev;
-                    });
+                    console.log('Downloading MP4 with highest quality...');
                     
-                    console.log(`Available video qualities: ${videoFormats.map(f => f.qualityLabel || f.height + 'p').join(', ')}`);
-                    console.log(`Selected: ${highestVideo.qualityLabel || highestVideo.height + 'p'} video + ${highestAudio.audioBitrate}kbps audio`);
+                    // Use yt-dlp with local FFmpeg for proper merging
+                    let ffmpegPath;
                     
-                    const outputPath = path.join(downloadPath, `${title}.mp4`);
-                    
-                    // Create temporary file paths for video and audio
-                    const tempVideoPath = path.join(downloadPath, `temp_video_${Date.now()}.mp4`);
-                    const tempAudioPath = path.join(downloadPath, `temp_audio_${Date.now()}.mp4`);
-                    
-                    // Download video stream
-                    const videoStream = ytdl(url, { format: highestVideo });
-                    const videoWriteStream = fs.createWriteStream(tempVideoPath);
-                    
-                    let videoDownloaded = false;
-                    let audioDownloaded = false;
-                    
-                    const checkBothComplete = () => {
-                        if (videoDownloaded && audioDownloaded) {
-                            // Both downloads complete, now merge with FFmpeg
-                            event.sender.send('download-progress', { 
-                                percent: 95,
-                                stage: 'Processing for Premiere Pro compatibility...' 
-                            });
-                            
-                            // Check if video needs re-encoding (VP9 to H.264 for Premiere Pro)
-                            const needsVideoReencoding = highestVideo.codecs && 
-                                (highestVideo.codecs.includes('vp9') || highestVideo.codecs.includes('vp09'));
-                            
-                            console.log(`Video codec: ${highestVideo.codecs}, needs re-encoding: ${needsVideoReencoding}`);
-                            
-                            const ffmpegCommand = ffmpeg(tempVideoPath)
-                                .input(tempAudioPath)
-                                .audioCodec('aac')
-                                .audioChannels(2)
-                                .audioFrequency(48000)
-                                .audioBitrate('320k')
-                                .format('mp4')
-                                .outputOptions([
-                                    '-movflags', '+faststart',
-                                    '-strict', 'experimental'
-                                ]);
-                            
-                            if (needsVideoReencoding) {
-                                // Re-encode VP9 to H.264 for Premiere Pro compatibility
-                                console.log('Converting VP9 to H.264 for Premiere Pro...');
-                                event.sender.send('download-progress', { 
-                                    percent: 95,
-                                    stage: 'Converting VP9 to H.264 for Premiere Pro...' 
-                                });
-                                
-                                ffmpegCommand
-                                    .videoCodec('libx264')
-                                    .videoBitrate('8000k') // High quality for editing
-                                    .outputOptions([
-                                        '-preset', 'fast',      // Balance speed vs compression
-                                        '-crf', '18',           // High quality constant rate factor
-                                        '-pix_fmt', 'yuv420p'   // Premiere-compatible pixel format
-                                    ]);
-                            } else {
-                                // Copy video codec if it's already compatible (H.264, etc.)
-                                ffmpegCommand.videoCodec('copy');
-                            }
-                            
-                            ffmpegCommand
-                                .save(outputPath)
-                                .on('progress', (progress) => {
-                                    if (needsVideoReencoding) {
-                                        // Video re-encoding progress (slower)
-                                        const percent = Math.min(99, 95 + (progress.percent || 0) * 0.04);
-                                        event.sender.send('download-progress', { 
-                                            percent: percent,
-                                            stage: `Converting VP9 to H.264... ${Math.round(progress.percent || 0)}%`
-                                        });
-                                    }
-                                })
-                                .on('end', () => {
-                                    // Clean up temporary files
-                                    try {
-                                        fs.unlinkSync(tempVideoPath);
-                                        fs.unlinkSync(tempAudioPath);
-                                    } catch (cleanupError) {
-                                        console.warn('Could not clean up temporary files:', cleanupError);
-                                    }
-                                    resolve({ success: true, path: outputPath });
-                                })
-                                .on('error', (error) => {
-                                    console.error('FFmpeg merge error:', error);
-                                    // Clean up temporary files on error
-                                    try {
-                                        fs.unlinkSync(tempVideoPath);
-                                        fs.unlinkSync(tempAudioPath);
-                                    } catch (cleanupError) {}
-                                    
-                                    // Fallback to combined format
-                                    downloadCombinedFormat();
-                                });
-                        }
-                    };
-                    
-                    const downloadCombinedFormat = () => {
-                        console.log('Falling back to combined format...');
-                        if (combinedFormats.length > 0) {
-                            const highestCombined = combinedFormats.reduce((prev, current) => {
-                                if (current.height !== prev.height) {
-                                    return (current.height > prev.height) ? current : prev;
-                                }
-                                return (current.bitrate > prev.bitrate) ? current : prev;
-                            });
-                            
-                            const fallbackStream = ytdl(url, { format: highestCombined });
-                            const writeStream = fs.createWriteStream(outputPath);
-                            
-                            fallbackStream.on('progress', (chunkLength, downloaded, total) => {
-                                const percent = ((downloaded / total) * 100).toFixed(1);
-                                event.sender.send('download-progress', { 
-                                    percent, 
-                                    stage: `Downloading ${highestCombined.qualityLabel || highestCombined.height + 'p'}...`
-                                });
-                            });
-                            
-                            fallbackStream.pipe(writeStream);
-                            
-                            writeStream.on('finish', () => {
-                                resolve({ success: true, path: outputPath });
-                            });
-                            
-                            writeStream.on('error', (error) => {
-                                reject({ success: false, error: 'Failed to download video: ' + error.message });
-                            });
-                        } else {
-                            reject({ success: false, error: 'No suitable video formats available' });
-                        }
-                    };
-                    
-                    // Download video
-                    videoStream.on('progress', (chunkLength, downloaded, total) => {
-                        const percent = ((downloaded / total) * 50).toFixed(1); // Video is 50% of progress
-                        event.sender.send('download-progress', { 
-                            percent, 
-                            stage: `Downloading ${highestVideo.qualityLabel || highestVideo.height + 'p'} video...`
-                        });
-                    });
-                    
-                    videoStream.pipe(videoWriteStream);
-                    
-                    videoWriteStream.on('finish', () => {
-                        videoDownloaded = true;
-                        checkBothComplete();
-                    });
-                    
-                    videoWriteStream.on('error', (error) => {
-                        console.error('Video download error:', error);
-                        downloadCombinedFormat();
-                    });
-                    
-                    // Download audio
-                    const audioStream = ytdl(url, { format: highestAudio });
-                    const audioWriteStream = fs.createWriteStream(tempAudioPath);
-                    
-                    audioStream.on('progress', (chunkLength, downloaded, total) => {
-                        const percent = (50 + (downloaded / total) * 45).toFixed(1); // Audio is 45% of progress (50-95%)
-                        event.sender.send('download-progress', { 
-                            percent, 
-                            stage: 'Downloading audio...'
-                        });
-                    });
-                    
-                    audioStream.pipe(audioWriteStream);
-                    
-                    audioWriteStream.on('finish', () => {
-                        audioDownloaded = true;
-                        checkBothComplete();
-                    });
-                    
-                    audioWriteStream.on('error', (error) => {
-                        console.error('Audio download error:', error);
-                        downloadCombinedFormat();
-                    });
-                    
-                } else {
-                    // Fallback to combined formats only
-                    if (combinedFormats.length > 0) {
-                        const highestCombined = combinedFormats.reduce((prev, current) => {
-                            if (current.height !== prev.height) {
-                                return (current.height > prev.height) ? current : prev;
-                            }
-                            return (current.bitrate > prev.bitrate) ? current : prev;
-                        });
-                        
-                        console.log(`Available combined qualities: ${combinedFormats.map(f => f.qualityLabel || f.height + 'p').join(', ')}`);
-                        console.log(`Selected combined quality: ${highestCombined.qualityLabel || highestCombined.height + 'p'}`);
-                        
-                        const videoStream = ytdl(url, { format: highestCombined });
-                        const outputPath = path.join(downloadPath, `${title}.mp4`);
-                        const tempCombinedPath = path.join(downloadPath, `temp_combined_${Date.now()}.mp4`);
-                        const writeStream = fs.createWriteStream(tempCombinedPath);
-                        
-                        videoStream.on('progress', (chunkLength, downloaded, total) => {
-                            const percent = ((downloaded / total) * 90).toFixed(1); // Leave 10% for processing
-                            event.sender.send('download-progress', { 
-                                percent, 
-                                stage: `Downloading ${highestCombined.qualityLabel || highestCombined.height + 'p'}...`
-                            });
-                        });
-                        
-                        videoStream.pipe(writeStream);
-                        
-                        writeStream.on('finish', () => {
-                            // Check if video needs re-encoding for Premiere Pro compatibility
-                            event.sender.send('download-progress', { 
-                                percent: 95,
-                                stage: 'Processing for Premiere Pro compatibility...' 
-                            });
-                            
-                            const needsVideoReencoding = highestCombined.codecs && 
-                                (highestCombined.codecs.includes('vp9') || highestCombined.codecs.includes('vp09'));
-                            
-                            console.log(`Combined format codec: ${highestCombined.codecs}, needs re-encoding: ${needsVideoReencoding}`);
-                            
-                            const ffmpegCommand = ffmpeg(tempCombinedPath)
-                                .audioCodec('aac')
-                                .audioChannels(2)
-                                .audioFrequency(48000)
-                                .audioBitrate('320k')
-                                .format('mp4')
-                                .outputOptions([
-                                    '-movflags', '+faststart',
-                                    '-strict', 'experimental'
-                                ]);
-                            
-                            if (needsVideoReencoding) {
-                                // Re-encode VP9 to H.264 for Premiere Pro compatibility
-                                console.log('Converting VP9 to H.264 for Premiere Pro...');
-                                event.sender.send('download-progress', { 
-                                    percent: 95,
-                                    stage: 'Converting VP9 to H.264 for Premiere Pro...' 
-                                });
-                                
-                                ffmpegCommand
-                                    .videoCodec('libx264')
-                                    .videoBitrate('8000k')
-                                    .outputOptions([
-                                        '-preset', 'fast',
-                                        '-crf', '18',
-                                        '-pix_fmt', 'yuv420p'
-                                    ]);
-                            } else {
-                                ffmpegCommand.videoCodec('copy');
-                            }
-                            
-                            ffmpegCommand
-                                .save(outputPath)
-                                .on('progress', (progress) => {
-                                    if (needsVideoReencoding) {
-                                        // Video re-encoding progress
-                                        const percent = Math.min(99, 95 + (progress.percent || 0) * 0.04);
-                                        event.sender.send('download-progress', { 
-                                            percent: percent,
-                                            stage: `Converting VP9 to H.264... ${Math.round(progress.percent || 0)}%`
-                                        });
-                                    }
-                                })
-                                .on('end', () => {
-                                    // Clean up temporary file
-                                    try {
-                                        fs.unlinkSync(tempCombinedPath);
-                                    } catch (cleanupError) {
-                                        console.warn('Could not clean up temporary file:', cleanupError);
-                                    }
-                                    resolve({ success: true, path: outputPath });
-                                })
-                                .on('error', (error) => {
-                                    console.error('FFmpeg processing error:', error);
-                                    // Clean up temp file and fall back to original
-                                    try {
-                                        if (fs.existsSync(tempCombinedPath)) {
-                                            fs.renameSync(tempCombinedPath, outputPath);
-                                            console.log('Falling back to original file format');
-                                            resolve({ success: true, path: outputPath });
-                                        } else {
-                                            reject({ success: false, error: 'Failed to process video: ' + error.message });
-                                        }
-                                    } catch (fallbackError) {
-                                        reject({ success: false, error: 'Failed to process video: ' + error.message });
-                                    }
-                                });
-                        });
-                        
-                        writeStream.on('error', (error) => {
-                            reject({ success: false, error: 'Failed to write file: ' + error.message });
-                        });
-                        
-                        videoStream.on('error', (error) => {
-                            reject({ success: false, error: 'Failed to download video: ' + error.message });
-                        });
+                    if (app.isPackaged) {
+                        // In packaged app, binaries are in extraResources
+                        ffmpegPath = path.join(process.resourcesPath, 'ffmpeg.exe');
                     } else {
-                        reject({ success: false, error: 'No video formats available for this video' });
+                        // In development, use local path
+                        ffmpegPath = path.join(__dirname, 'ffmpeg.exe');
                     }
-                }
-                
-            } else if (format === 'mp3') {
-                // Async function to handle MP3 download with thumbnail
-                const downloadMp3WithMetadata = async () => {
-                    // Check for audio formats
-                    const audioFormats = ytdl.filterFormats(info.formats, 'audioonly');
-                    if (audioFormats.length === 0) {
-                        throw new Error('No audio formats available for this video');
-                    }
-
-                    // Get highest quality audio
-                    const highestAudio = audioFormats.reduce((prev, current) => {
-                        return (current.audioBitrate > prev.audioBitrate) ? current : prev;
-                    });
-
-                    // Extract metadata from video info
-                    const metadata = extractMetadata(info.videoDetails);
+                    const args = [
+                        url,
+                        '-f', 'bestvideo[height<=2160][vcodec^=avc1][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=2160][vcodec^=avc1]+bestaudio/bestvideo[height<=2160][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=2160]+bestaudio/best[height<=2160]',
+                        '-o', outputPath,
+                        '--no-playlist',
+                        '--embed-metadata',
+                        '--add-metadata',
+                        '--merge-output-format', 'mp4',
+                        '--no-keep-video',
+                        '--no-mtime'
+                    ];
                     
-                    // First, download the thumbnail if available
+                    // Add FFmpeg location if the local file exists
+                    if (fs.existsSync(ffmpegPath)) {
+                        args.push('--ffmpeg-location', ffmpegPath);
+                        console.log('Using local FFmpeg:', ffmpegPath);
+                    }
+                    
+                    const stream = ytDlp.exec(args);
+                    
+                    let progress = 0;
+                    
+                    stream.on('progress', (progressData) => {
+                        if (progressData.percent) {
+                            progress = parseFloat(progressData.percent);
+                            event.sender.send('download-progress', {
+                                percent: progress,
+                                stage: `Downloading ${progressData.percent}%...`
+                            });
+                        }
+                    });
+                    
+                    stream.on('youtubeDL', (data) => {
+                        console.log('yt-dlp output:', data);
+                    });
+                    
+                    stream.on('error', (error) => {
+                        console.error('Download error:', error);
+                        reject({ success: false, error: 'Download failed: ' + error.message });
+                    });
+                    
+                    stream.on('close', () => {
+                        console.log('Download completed');
+                        const finalPath = path.join(downloadPath, `${title}.mp4`);
+                        resolve({ success: true, path: finalPath });
+                    });
+                    
+                } else if (format === 'mp3') {
+                    console.log('Downloading MP3...');
+                    
+                    // Download thumbnail first for metadata
                     let thumbnailPath = null;
-                    if (info.videoDetails.thumbnails && info.videoDetails.thumbnails.length > 0) {
-                        const thumbnails = info.videoDetails.thumbnails;
-                        
-                        // Sort thumbnails by quality (width) descending
-                        const sortedThumbnails = thumbnails
-                            .filter(thumb => thumb.url && thumb.width && thumb.height)
-                            .sort((a, b) => b.width - a.width);
-                        
-                        const thumbnailFile = path.join(downloadPath, `temp_thumb_${Date.now()}.jpg`);
-                        event.sender.send('download-progress', { 
-                            percent: 5,
-                            stage: 'Downloading thumbnail...' 
-                        });
-                        
-                        // Try multiple thumbnail URLs in order of quality
-                        for (let i = 0; i < Math.min(3, sortedThumbnails.length); i++) {
-                            const thumbnail = sortedThumbnails[i];
-                            console.log(`Trying thumbnail ${i + 1}: ${thumbnail.width}x${thumbnail.height} from ${thumbnail.url}`);
+                    if (videoInfo.thumbnail) {
+                        try {
+                            event.sender.send('download-progress', {
+                                percent: 5,
+                                stage: 'Downloading thumbnail...'
+                            });
                             
-                            try {
-                                thumbnailPath = await downloadThumbnail(thumbnail.url, thumbnailFile);
-                                
-                                if (thumbnailPath && fs.existsSync(thumbnailPath)) {
-                                    const stats = fs.statSync(thumbnailPath);
-                                    if (stats.size > 0) {
-                                        console.log(`Thumbnail success: ${stats.size} bytes`);
-                                        break; // Success, stop trying
-                                    } else {
-                                        console.warn('Thumbnail file is empty, trying next...');
-                                        try {
-                                            fs.unlinkSync(thumbnailPath);
-                                        } catch (e) {}
-                                        thumbnailPath = null;
-                                    }
-                                } else {
-                                    console.warn('Thumbnail download failed, trying next...');
-                                    thumbnailPath = null;
-                                }
-                            } catch (thumbError) {
-                                console.warn(`Thumbnail ${i + 1} failed:`, thumbError.message);
-                                thumbnailPath = null;
-                            }
-                        }
-                        
-                        if (!thumbnailPath) {
-                            console.warn('All thumbnail downloads failed');
+                            thumbnailPath = path.join(downloadPath, `temp_thumbnail_${Date.now()}.jpg`);
+                            await downloadThumbnail(videoInfo.thumbnail, thumbnailPath);
+                        } catch (error) {
+                            console.warn('Thumbnail download failed:', error);
                         }
                     }
-
-                    // Now start audio download and conversion
-                    const audioStream = ytdl(url, { format: highestAudio });
-                    const outputPath = path.join(downloadPath, `${title}.mp3`);
-                    const tempMp3Path = path.join(downloadPath, `temp_${title}_${Date.now()}.mp3`);
                     
-                    event.sender.send('download-progress', { 
-                        percent: 10,
-                        stage: 'Starting audio conversion...' 
+                    // Download audio with yt-dlp
+                    const outputPath = path.join(downloadPath, `${title}.%(ext)s`);
+                    
+                    const stream = ytDlp.exec([
+                        url,
+                        '-x', // Extract audio
+                        '--audio-format', 'mp3',
+                        '--audio-quality', '0', // Best quality
+                        '-o', outputPath,
+                        '--no-playlist',
+                        '--embed-metadata',
+                        '--add-metadata'
+                    ]);
+                    
+                    let downloadProgress = 0;
+                    
+                    stream.on('progress', (progressData) => {
+                        if (progressData.percent) {
+                            downloadProgress = parseFloat(progressData.percent);
+                            // Reserve 5-85% for download, 85-90% for metadata, 90-100% for finalization
+                            const adjustedProgress = 5 + (downloadProgress * 0.8);
+                            event.sender.send('download-progress', {
+                                percent: adjustedProgress,
+                                stage: `Converting to MP3... ${progressData.percent}%`
+                            });
+                        }
                     });
                     
-                    return new Promise((resolveInner, rejectInner) => {
-                        ffmpeg(audioStream)
-                            .audioBitrate(320)
-                            .audioCodec('libmp3lame')
-                            .format('mp3')
-                            .save(tempMp3Path)
-                            .on('progress', (progress) => {
-                                const percent = Math.min(80, 15 + (progress.percent || 0) * 0.65);
-                                event.sender.send('download-progress', { 
-                                    percent: percent,
-                                    stage: 'Converting to MP3...' 
-                                });
-                            })
-                            .on('end', () => {
-                                // Now add metadata tags to the MP3 file
-                                event.sender.send('download-progress', { 
-                                    percent: 85,
-                                    stage: 'Adding metadata tags...' 
-                                });
-                                
-                                const tags = {
+                    stream.on('youtubeDL', (data) => {
+                        console.log('yt-dlp output:', data);
+                    });
+                    
+                    stream.on('error', (error) => {
+                        console.error('Download error:', error);
+                        if (thumbnailPath && fs.existsSync(thumbnailPath)) {
+                            fs.unlinkSync(thumbnailPath);
+                        }
+                        reject({ success: false, error: 'Download failed: ' + error.message });
+                    });
+                    
+                    stream.on('close', async () => {
+                        try {
+                            console.log('Audio download completed, adding metadata...');
+                            
+                            event.sender.send('download-progress', {
+                                percent: 85,
+                                stage: 'Adding metadata tags...'
+                            });
+                            
+                            const finalMp3Path = path.join(downloadPath, `${title}.mp3`);
+                            
+                            // Extract metadata
+                            const metadata = extractMetadata(videoInfo);
+                            
+                            // Add thumbnail as album art if available
+                            if (thumbnailPath && fs.existsSync(thumbnailPath)) {
+                                try {
+                                    const thumbnailBuffer = fs.readFileSync(thumbnailPath);
+                                    metadata.image = {
+                                        mime: 'image/jpeg',
+                                        type: {
+                                            id: 3,
+                                            name: 'front cover'
+                                        },
+                                        description: 'Album Cover',
+                                        imageBuffer: thumbnailBuffer
+                                    };
+                                } catch (error) {
+                                    console.warn('Failed to add album art:', error);
+                                }
+                            }
+                            
+                            // Write metadata to MP3
+                            try {
+                                const success = NodeID3.write(metadata, finalMp3Path);
+                                if (success) {
+                                    console.log('Metadata written successfully');
+                                } else {
+                                    console.warn('Failed to write some metadata');
+                                }
+                            } catch (error) {
+                                console.warn('Metadata writing failed:', error);
+                            }
+                            
+                            // Clean up thumbnail
+                            if (thumbnailPath && fs.existsSync(thumbnailPath)) {
+                                fs.unlinkSync(thumbnailPath);
+                            }
+                            
+                            event.sender.send('download-progress', {
+                                percent: 100,
+                                stage: 'Complete!'
+                            });
+                            
+                            resolve({ 
+                                success: true, 
+                                path: finalMp3Path,
+                                metadata: {
                                     title: metadata.title,
                                     artist: metadata.artist,
-                                    album: metadata.album,
-                                    genre: metadata.genre,
                                     year: metadata.year,
-                                    comment: metadata.comment,
-                                    performerInfo: metadata.performerInfo,
-                                    originalFilename: metadata.originalFilename,
-                                    TRCK: '1/1',
-                                    TPE2: metadata.artist,
-                                    TPOS: '1/1',
-                                    TBPM: '',
-                                    TIT3: 'YouTube Download',
-                                    TKEY: '',
-                                    TLAN: 'eng',
-                                    TMED: 'DIG',
-                                    TPUB: 'YouTube',
-                                    TCOP: `© ${metadata.artist}`,
-                                    TENC: 'YouTube Video Downloader',
-                                    TSSE: 'YouTube Video Downloader v1.0',
-                                    WXXX: {
-                                        description: 'Source',
-                                        url: url
-                                    }
-                                };
-                                
-                                // Add thumbnail as album art if available and verify it exists
-                                if (thumbnailPath && fs.existsSync(thumbnailPath)) {
-                                    try {
-                                        const thumbnailBuffer = fs.readFileSync(thumbnailPath);
-                                        if (thumbnailBuffer.length > 0) {
-                                            // Use APIC frame format for better compatibility
-                                            tags.APIC = {
-                                                mime: 'image/jpeg',
-                                                type: {
-                                                    id: 3,
-                                                    name: 'front cover'
-                                                },
-                                                description: 'Cover (front)',
-                                                imageBuffer: thumbnailBuffer
-                                            };
-                                            
-                                            // Also set the legacy image field for backward compatibility
-                                            tags.image = {
-                                                mime: 'image/jpeg',
-                                                type: {
-                                                    id: 3,
-                                                    name: 'front cover'
-                                                },
-                                                description: 'Cover (front)',
-                                                imageBuffer: thumbnailBuffer
-                                            };
-                                            
-                                            console.log(`Album art added (APIC + image): ${thumbnailBuffer.length} bytes`);
-                                            
-                                            event.sender.send('download-progress', { 
-                                                percent: 90,
-                                                stage: 'Embedding album artwork...' 
-                                            });
-                                        } else {
-                                            console.warn('Thumbnail buffer is empty');
-                                        }
-                                    } catch (thumbError) {
-                                        console.warn('Could not read thumbnail for album art:', thumbError);
-                                    }
-                                } else {
-                                    console.warn('No thumbnail available for album art');
+                                    hasAlbumArt: !!metadata.image
                                 }
-                                
-                                event.sender.send('download-progress', { 
-                                    percent: 95,
-                                    stage: 'Writing metadata to file...' 
-                                });
-                                
-                                // Write tags to MP3 file
-                                try {
-                                    const success = NodeID3.write(tags, tempMp3Path);
-                                    
-                                    if (success) {
-                                        // Move the tagged file to final location
-                                        fs.renameSync(tempMp3Path, outputPath);
-                                        console.log('MP3 metadata written successfully');
-                                        
-                                        // Clean up thumbnail file
-                                        if (thumbnailPath && fs.existsSync(thumbnailPath)) {
-                                            try {
-                                                fs.unlinkSync(thumbnailPath);
-                                                console.log('Thumbnail cleanup completed');
-                                            } catch (cleanupError) {
-                                                console.warn('Could not clean up thumbnail:', cleanupError);
-                                            }
-                                        }
-                                        
-                                        event.sender.send('download-progress', { 
-                                            percent: 100,
-                                            stage: 'Complete!' 
-                                        });
-                                        
-                                        resolveInner({ 
-                                            success: true, 
-                                            path: outputPath,
-                                            metadata: {
-                                                title: metadata.title,
-                                                artist: metadata.artist,
-                                                year: metadata.year,
-                                                hasArtwork: !!(thumbnailPath && tags.image)
-                                            }
-                                        });
-                                    } else {
-                                        console.warn('NodeID3.write returned false');
-                                        fs.renameSync(tempMp3Path, outputPath);
-                                        
-                                        if (thumbnailPath && fs.existsSync(thumbnailPath)) {
-                                            try {
-                                                fs.unlinkSync(thumbnailPath);
-                                            } catch (cleanupError) {}
-                                        }
-                                        
-                                        resolveInner({ 
-                                            success: true, 
-                                            path: outputPath,
-                                            warning: 'MP3 created but metadata tagging failed'
-                                        });
-                                    }
-                                } catch (tagError) {
-                                    console.error('Error writing metadata:', tagError);
-                                    fs.renameSync(tempMp3Path, outputPath);
-                                    
-                                    if (thumbnailPath && fs.existsSync(thumbnailPath)) {
-                                        try {
-                                            fs.unlinkSync(thumbnailPath);
-                                        } catch (cleanupError) {}
-                                    }
-                                    
-                                    resolveInner({ 
-                                        success: true, 
-                                        path: outputPath,
-                                        warning: 'MP3 created but metadata tagging failed: ' + tagError.message
-                                    });
-                                }
-                            })
-                            .on('error', (error) => {
-                                console.error('FFmpeg error:', error);
-                                
-                                // Clean up temp files on error
-                                try {
-                                    if (fs.existsSync(tempMp3Path)) fs.unlinkSync(tempMp3Path);
-                                    if (thumbnailPath && fs.existsSync(thumbnailPath)) fs.unlinkSync(thumbnailPath);
-                                } catch (cleanupError) {
-                                    console.warn('Error cleaning up temp files:', cleanupError);
-                                }
-                                
-                                rejectInner({ success: false, error: 'Failed to convert to MP3: ' + error.message });
                             });
+                            
+                        } catch (error) {
+                            console.error('Post-processing error:', error);
+                            if (thumbnailPath && fs.existsSync(thumbnailPath)) {
+                                fs.unlinkSync(thumbnailPath);
+                            }
+                            reject({ success: false, error: 'Post-processing failed: ' + error.message });
+                        }
                     });
-                };
+                }
                 
-                // Execute the async MP3 download
-                downloadMp3WithMetadata()
-                    .then(result => resolve(result))
-                    .catch(error => reject(error));
+            } catch (error) {
+                console.error('Download setup error:', error);
+                reject({ success: false, error: 'Failed to start download: ' + error.message });
             }
         });
         
@@ -873,7 +525,7 @@ ipcMain.handle('download-video', async (event, { url, downloadPath, format }) =>
         console.error('Download error:', error);
         return { 
             success: false, 
-            error: 'Download failed. This could be due to YouTube restrictions or network issues. Please try again.' 
+            error: 'Download failed. Please check the URL and try again.'
         };
     }
 });
